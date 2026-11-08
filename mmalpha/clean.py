@@ -27,6 +27,10 @@ OUT = DATA / "processed"
 MIN_HOLDERS = 20
 MIN_NAV = 10e6  # median NAV in BRL; below this it is usually an incubator fund
 
+# Crypto funds are registered as multimercado but are a single-asset bet that
+# none of the factors can describe; their "alpha" would just be crypto returns.
+CRYPTO = r"CRIPTO|CRYPTO|BITCOIN|BLOCKCHAIN|ETHEREUM|\bCOIN\b|\bDEFI\b"
+
 # Quota errors. A monthly move above +900% or below -90% in a multimercado is a
 # unit change in the reported quota, not a return. A move above 30% that is
 # undone the following month (within 5%) is a typo in one month's quota.
@@ -95,6 +99,44 @@ def clean_quota_returns(quota: pd.DataFrame) -> tuple[pd.DataFrame, int]:
     return ret.mask(bad), int(bad.sum().sum())
 
 
+def long_bond_returns(prices: pd.DataFrame, target_years: float = 10.0) -> pd.Series:
+    """Monthly return of holding the zero-coupon IPCA+ bond (NTN-B Principal)
+    closest to `target_years` to maturity, chosen at the start of each month.
+
+    A stand-in for IMA-B: ANBIMA indices stopped being published on the BCB
+    SGS in 2023. Zero-coupon bonds pay nothing until maturity, so the price
+    change is the full return.
+
+    `prices` has columns date, maturity, price (one row per bond per day).
+    """
+    month_end = (
+        prices.assign(month=prices["date"].dt.to_period("M"))
+        .sort_values("date")
+        .groupby(["month", "maturity"])["price"].last()
+        .unstack()
+    )
+    out = {}
+    for prev, cur in zip(month_end.index[:-1], month_end.index[1:]):
+        held = month_end.loc[prev].dropna()
+        both = held.index.intersection(month_end.loc[cur].dropna().index)
+        if both.empty:
+            continue
+        years = (both - prev.end_time).days / 365.25
+        bond = both[abs(years - target_years).argmin()]
+        out[cur] = month_end.loc[cur, bond] / month_end.loc[prev, bond] - 1
+    return pd.Series(out)
+
+
+def load_tesouro_ipca() -> pd.DataFrame:
+    td = pd.read_csv(DATA / "market" / "tesouro_direto.csv", sep=";", decimal=",")
+    td = td[td["Tipo Titulo"] == "Tesouro IPCA+"]
+    return pd.DataFrame({
+        "date": pd.to_datetime(td["Data Base"], format="%d/%m/%Y"),
+        "maturity": pd.to_datetime(td["Data Vencimento"], format="%d/%m/%Y"),
+        "price": td["PU Base Manha"],
+    })
+
+
 def monthly_factors() -> pd.DataFrame:
     mkt = DATA / "market"
     cdi = pd.read_parquet(mkt / "cdi.parquet")["cdi"]
@@ -102,11 +144,13 @@ def monthly_factors() -> pd.DataFrame:
     usd = pd.read_parquet(mkt / "usdbrl.parquet")["usdbrl"]
 
     month = lambda s: s.index.to_period("M")
-    return pd.DataFrame({
+    factors = pd.DataFrame({
         "cdi": (1 + cdi / 100).groupby(month(cdi)).prod() - 1,
         "ibov": ibov.groupby(month(ibov)).last().pct_change(),
         "usd": usd.groupby(month(usd)).last().pct_change(),
-    }).dropna().rename_axis("month")
+    })
+    factors["ntnb"] = long_bond_returns(load_tesouro_ipca())
+    return factors.dropna().rename_axis("month")
 
 
 def build() -> None:
@@ -135,6 +179,7 @@ def build() -> None:
     rules = [
         ("exclusive", funds["exclusive"] == "S"),
         ("closed_end", funds["structure"] == "Fechado"),
+        ("crypto", funds["name"].str.contains(CRYPTO, case=False, na=False)),
         ("few_holders", funds["median_holders"] < MIN_HOLDERS),
         ("small_nav", funds["median_nav"] < MIN_NAV),
     ]

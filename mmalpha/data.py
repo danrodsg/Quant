@@ -4,6 +4,7 @@
 - CVM fund registries (legacy cad_fi + the post-RCVM 175 registro_classe)
 - CDI and USD/BRL from the BCB SGS API
 - Ibovespa from Yahoo Finance
+- Tesouro Direto bond prices (for the long inflation-linked bond factor)
 
 The daily reports are ~1 GB of zips for 2016-2025. Each month is reduced to the
 last report of every fund as soon as it is read, so only the small monthly
@@ -45,6 +46,13 @@ COLUMNS = {
 }
 
 SGS_SERIES = {"cdi": 12, "usdbrl": 1}  # CDI in % per day; PTAX sell rate
+
+# Full price history of every Tesouro Direto bond, from the Treasury open-data portal.
+TESOURO_URL = (
+    "https://www.tesourotransparente.gov.br/ckan/dataset/"
+    "df56aa42-484a-4a59-8184-7676580c81e3/resource/"
+    "796d2059-14e9-44e3-80c9-2d9e30b405c1/download/PrecoTaxaTesouroDireto.csv"
+)
 
 
 def _session() -> requests.Session:
@@ -173,6 +181,9 @@ def download_market(start: str, end: str) -> None:
     close = ibov["Close"].squeeze().rename("ibov")
     close.index = close.index.tz_localize(None)
     close.to_frame().to_parquet(out / "ibov.parquet")
+
+    print("Tesouro Direto")
+    (out / "tesouro_direto.csv").write_bytes(_get(TESOURO_URL))
 
 
 def main() -> None:
