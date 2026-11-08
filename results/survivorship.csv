@@ -1,0 +1,4 @@
+portfolio,excess_over_cdi_pct_year,alpha_pct_year,t_alpha,beta_ibov,beta_usd,beta_ntnb,r2
+all_funds,0.9744,-0.06635,-0.1015,0.1274,0.01795,0.03627,0.6456
+survivors_only,1.566,0.5277,0.7743,0.126,0.0199,0.03414,0.622
+bias,0.5912,0.5941,,-0.00138,0.001946,-0.002124,
