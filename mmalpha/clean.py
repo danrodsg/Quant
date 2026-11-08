@@ -1,15 +1,4 @@
-"""Build the fund universe and the monthly return panel.
-
-Inputs come from mmalpha.data. Outputs, in data/processed/:
-
-    funds.parquet    one row per multimercado fund, with the filter it failed (if any)
-    returns.parquet  monthly net-of-fee returns of the funds that pass every filter
-    factors.parquet  monthly CDI, Ibovespa and USD/BRL returns
-
-    uv run python -m mmalpha.clean
-"""
-
-from __future__ import annotations
+"""Universo de multimercados, retornos mensais e fatores."""
 
 from pathlib import Path
 
@@ -19,40 +8,27 @@ import pandas as pd
 DATA = Path("data")
 OUT = DATA / "processed"
 
-# A fund needs this many holders (median over its life) to count as a fund that
-# someone could actually buy. 85% of multimercados have a median of 1: they are
-# exclusive funds of a single family or company, or master funds held only by
-# their own feeder funds. Dropping them also avoids counting a master and its
-# feeder as two separate funds.
+# 85% dos multimercados têm mediana de 1 cotista (exclusivos ou masters).
+# Esse corte também evita contar master e FIC como dois fundos.
 MIN_HOLDERS = 20
-MIN_NAV = 10e6  # median NAV in BRL; below this it is usually an incubator fund
+MIN_NAV = 10e6
 
-# Crypto funds are registered as multimercado but are a single-asset bet that
-# none of the factors can describe; their "alpha" would just be crypto returns.
 CRYPTO = r"CRIPTO|CRYPTO|BITCOIN|BLOCKCHAIN|ETHEREUM|\bCOIN\b|\bDEFI\b"
 
-# Quota errors. A monthly move above +900% or below -90% in a multimercado is a
-# unit change in the reported quota, not a return. A move above 30% that is
-# undone the following month (within 5%) is a typo in one month's quota.
+# erro de cota: mudança de unidade (>10x) ou salto >30% que volta no mês seguinte
 MAX_RATIO = 10.0
 SPIKE = 0.30
 SPIKE_UNDO = 0.05
 
 
 def load_registry() -> pd.DataFrame:
-    """Merge the two CVM registries into one row per CNPJ.
-
-    When a CNPJ appears in both, the post-RCVM 175 registry wins because it is
-    the one the CVM keeps updated; blanks there are filled from cad_fi. cad_fi has repeated CNPJs (funds cancelled
-    and registered again); the most recent registration is kept.
-    """
     reg = DATA / "cvm" / "registry"
 
     cad = pd.read_csv(reg / "cad_fi.csv", sep=";", encoding="latin1", dtype=str)
     cad = (
         cad.assign(cnpj=cad["CNPJ_FUNDO"].str.replace(r"\D", "", regex=True))
         .sort_values("DT_REG")
-        .drop_duplicates("cnpj", keep="last")
+        .drop_duplicates("cnpj", keep="last")  # tem CNPJ cancelado e registrado de novo
         .rename(columns={"DENOM_SOCIAL": "name", "CLASSE": "category",
                          "FUNDO_EXCLUSIVO": "exclusive", "CONDOM": "structure"})
         .assign(source="cad_fi")
@@ -67,8 +43,7 @@ def load_registry() -> pd.DataFrame:
         .assign(source="registro_classe")
     )
 
-    # Field by field, so a fund whose new registration left the category blank
-    # still keeps the category it had in cad_fi.
+    # cadastro novo tem prioridade, campos vazios vêm do antigo
     cols = ["cnpj", "name", "category", "exclusive", "structure", "source"]
     return new[cols].set_index("cnpj").combine_first(cad[cols].set_index("cnpj"))
 
@@ -81,33 +56,23 @@ def load_snapshots() -> pd.DataFrame:
 
 
 def clean_quota_returns(quota: pd.DataFrame) -> tuple[pd.DataFrame, int]:
-    """Monthly returns from a month x fund quota table, with quota errors removed.
-
-    Returns are only computed between consecutive months: a fund that skips a
-    month gets NaN rather than a two-month return.
-    """
+    # mês faltando vira NaN, não retorno de dois meses
     ret = quota.pct_change(fill_method=None)
 
     unit_change = (ret > MAX_RATIO - 1) | (ret < 1 / MAX_RATIO - 1)
 
     nxt = ret.shift(-1)
     spike = (ret.abs() > SPIKE) & (((1 + ret) * (1 + nxt) - 1).abs() < SPIKE_UNDO)
-    # The bad quota is in month t, so both the move into it and out of it go.
-    spike = spike | spike.shift(1, fill_value=False)
+    spike = spike | spike.shift(1, fill_value=False)  # tira a ida e a volta
 
     bad = unit_change | spike
     return ret.mask(bad), int(bad.sum().sum())
 
 
 def long_bond_returns(prices: pd.DataFrame, target_years: float = 10.0) -> pd.Series:
-    """Monthly return of holding the zero-coupon IPCA+ bond (NTN-B Principal)
-    closest to `target_years` to maturity, chosen at the start of each month.
+    """Retorno mensal do Tesouro IPCA+ (sem cupom) mais perto de 10 anos.
 
-    A stand-in for IMA-B: ANBIMA indices stopped being published on the BCB
-    SGS in 2023. Zero-coupon bonds pay nothing until maturity, so the price
-    change is the full return.
-
-    `prices` has columns date, maturity, price (one row per bond per day).
+    Uso no lugar do IMA-B, que saiu do SGS em 2023.
     """
     month_end = (
         prices.assign(month=prices["date"].dt.to_period("M"))
@@ -171,11 +136,9 @@ def build() -> None:
         ),
         how="inner",
     )
-    # Alive = still reporting in the last month of the sample. Everything else
-    # was closed, merged or liquidated somewhere in between.
     funds["alive"] = funds["last_month"] == last_month
 
-    # Each fund gets the first filter it fails, so the funnel adds up.
+    # cada fundo leva o primeiro filtro em que falha, pra o funil fechar
     rules = [
         ("exclusive", funds["exclusive"] == "S"),
         ("closed_end", funds["structure"] == "Fechado"),
@@ -198,12 +161,12 @@ def build() -> None:
     returns.to_parquet(OUT / "returns.parquet")
     monthly_factors().to_parquet(OUT / "factors.parquet")
 
-    print(f"Multimercados with data: {len(funds):>6}")
+    print(f"multimercados: {len(funds)}")
     for name, _ in rules:
-        print(f"  excluded {name:<12} {(funds['excluded_by'] == name).sum():>6}")
-    print(f"In sample:               {len(keep):>6}  "
-          f"({funds.loc[keep, 'alive'].sum()} alive, {(~funds.loc[keep, 'alive']).sum()} dead)")
-    print(f"Monthly returns:         {len(returns):>6}  ({n_bad} removed as quota errors)")
+        print(f"  - {name}: {(funds['excluded_by'] == name).sum()}")
+    alive = funds.loc[keep, "alive"]
+    print(f"amostra: {len(keep)} ({alive.sum()} vivos, {(~alive).sum()} encerrados)")
+    print(f"retornos mensais: {len(returns)} ({n_bad} erros de cota removidos)")
 
 
 if __name__ == "__main__":

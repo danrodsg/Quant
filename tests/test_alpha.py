@@ -13,8 +13,8 @@ def data():
     T, N = 60, 5
     X = np.column_stack([np.ones(T), rng.normal(size=(T, 3))])
     Y = X @ rng.normal(size=(4, N)) + rng.normal(scale=0.5, size=(T, N))
-    Y[:20, 1] = np.nan  # a fund that starts late
-    Y[::7, 2] = np.nan  # a fund with gaps
+    Y[:20, 1] = np.nan  # começa atrasado
+    Y[::7, 2] = np.nan  # com buracos
     return X, Y
 
 
@@ -41,7 +41,7 @@ def test_weights_equal_repeated_rows(data):
 
 def test_too_few_months_gives_nan(data):
     X, Y = data
-    coef, _, _ = batch_ols(X, Y, min_obs=45)  # fund 1 only has 40 months
+    coef, _, _ = batch_ols(X, Y, min_obs=45)  # fundo 1 só tem 40 meses
     assert np.isnan(coef[1]).all()
     assert not np.isnan(coef[0]).any()
 

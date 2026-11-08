@@ -4,7 +4,7 @@ import pandas as pd
 
 from mmalpha.data import month_end_snapshot
 
-# One sample per header layout the CVM has used since 2016.
+# um exemplo de cada layout da CVM desde 2016
 PRE_2021 = """CNPJ_FUNDO;DT_COMPTC;VL_TOTAL;VL_QUOTA;VL_PATRIM_LIQ;CAPTC_DIA;RESG_DIA;NR_COTST
 00.000.746/0001-03;2016-01-04;1.0;10.0;100.0;0;0;81
 00.000.746/0001-03;2016-01-29;1.0;10.5;105.0;0;0;80

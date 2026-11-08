@@ -18,7 +18,7 @@ def test_normal_returns_untouched():
 
 
 def test_one_month_typo_removes_move_in_and_out():
-    # 100 -> 150 -> 100.5: the 150 is wrong, so neither return can be trusted.
+    # 100 -> 150 -> 100.5: o 150 está errado
     ret, n_bad = clean_quota_returns(quotas(100, 100, 150, 100.5, 101))
     assert n_bad == 2
     assert ret["f"].iloc[2:4].isna().all()
@@ -26,14 +26,14 @@ def test_one_month_typo_removes_move_in_and_out():
 
 
 def test_large_move_that_sticks_is_kept():
-    # A real 40% loss is not undone the next month, so it stays.
+    # queda real de 40% não volta, fica
     ret, n_bad = clean_quota_returns(quotas(100, 60, 61))
     assert n_bad == 0
     assert ret["f"].iloc[1] == pytest.approx(-0.4)
 
 
 def test_unit_change_is_removed():
-    # Quota reported in different units from one month on (x1000).
+    # cota passa a vir em outra unidade (x1000)
     ret, n_bad = clean_quota_returns(quotas(1.0, 1.01, 1020.0, 1030.0))
     assert n_bad == 1
     assert np.isnan(ret["f"].iloc[2])
